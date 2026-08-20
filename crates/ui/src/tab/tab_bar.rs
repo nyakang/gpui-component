@@ -461,7 +461,12 @@ impl RenderOnce for TabBar {
             rendered_tabs.push(if let Some(ref rc) = bounds_rc {
                 let rc = rc.clone();
                 div()
-                    .flex_shrink_0()
+                    .when(self.variant == TabVariant::Segmented, |this| {
+                        this.flex_1().min_w_0()
+                    })
+                    .when(self.variant != TabVariant::Segmented, |this| {
+                        this.flex_shrink_0()
+                    })
                     .on_prepaint(move |bounds, _, _| {
                         if let Some(slot) = rc.borrow_mut().tabs.get_mut(ix) {
                             *slot = bounds;
@@ -513,6 +518,7 @@ impl RenderOnce for TabBar {
                             .px(padding_x)
                             .relative()
                             .gap(gap)
+                            .when(self.variant == TabVariant::Segmented, |this| this.w_full())
                             .overflow_x_scroll()
                             .lock_scroll_axis()
                             .when_some(self.scroll_handle, |this, scroll_handle| {
