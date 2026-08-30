@@ -13,6 +13,7 @@ pub(crate) struct MenuItemElement {
     aria_label: Option<SharedString>,
     style: StyleRefinement,
     disabled: bool,
+    disabled_opacity: Option<f32>,
     selected: bool,
     on_click: Option<Box<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>>,
     on_hover: Option<Box<dyn Fn(&bool, &mut Window, &mut App) + 'static>>,
@@ -29,6 +30,7 @@ impl MenuItemElement {
             aria_label: None,
             style: StyleRefinement::default(),
             disabled: false,
+            disabled_opacity: None,
             selected: false,
             on_click: None,
             on_hover: None,
@@ -51,6 +53,11 @@ impl MenuItemElement {
     /// Set the disabled state of the MenuItem.
     pub(crate) fn disabled(mut self, disabled: bool) -> Self {
         self.disabled = disabled;
+        self
+    }
+
+    pub(crate) fn disabled_opacity(mut self, opacity: Option<f32>) -> Self {
+        self.disabled_opacity = opacity;
         self
     }
 
@@ -92,6 +99,8 @@ impl ParentElement for MenuItemElement {
 
 impl RenderOnce for MenuItemElement {
     fn render(self, _: &mut Window, cx: &mut App) -> impl IntoElement {
+        let disabled = self.disabled;
+        let disabled_opacity = self.disabled_opacity.filter(|_| disabled);
         h_flex()
             .id(self.id)
             .role(Role::MenuItem)
@@ -110,7 +119,7 @@ impl RenderOnce for MenuItemElement {
             .when_some(self.on_hover, |this, on_hover| {
                 this.on_hover(move |hovered, window, cx| (on_hover)(hovered, window, cx))
             })
-            .when(!self.disabled, |this| {
+            .when(!disabled, |this| {
                 this.group_hover(self.group_name, |this| {
                     this.bg(cx.theme().tokens.accent)
                         .text_color(cx.theme().accent_foreground)
@@ -126,9 +135,10 @@ impl RenderOnce for MenuItemElement {
                     .on_click(on_click)
                 })
             })
-            .when(self.disabled, |this| {
+            .when(disabled && disabled_opacity.is_none(), |this| {
                 this.text_color(cx.theme().muted_foreground)
             })
+            .when_some(disabled_opacity, |this, opacity| this.opacity(opacity))
             .children(self.children)
     }
 }

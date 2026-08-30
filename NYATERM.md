@@ -28,6 +28,12 @@ changes that could not be made on the NyaTerm side.
    overlay does not reveal the bar behind it, and a `reveal_hover` predicate.
    Thumb styling still keys off track hover alone; `Scrolling` and `Always` are
    unchanged.
+4. `feat(menu): support configurable popup appearance` — adds an opt-in
+   `PopupMenuAppearance` for row, typography, icon-slot, spacing, separator,
+   radius and disabled-state metrics. The default keeps the upstream rendering
+   unchanged, while nested submenus inherit the nearest parent appearance
+   unless they explicitly override it. NyaTerm uses this at its `nyaterm-ui`
+   boundary to align ordinary component menus with its richer tab context menu.
 
 ## Not carried here
 
@@ -81,3 +87,18 @@ cargo test -p gpui-base          # 574 passed, incl. the two reveal_hover cases
 cargo test -p gpui-base reveal   # 2 passed
 cargo check -p gpui-component    # clean
 ```
+
+The popup appearance patch was additionally validated on Windows 11 with:
+
+```sh
+cargo test -p gpui-component menu::popup_menu --lib # 4 passed
+cargo test -p gpui-component # 465 passed; one unrelated tab-width test failed
+cargo check -p gpui-component # clean
+cargo clippy -p gpui-component --all-targets # clean
+```
+
+The full-test failure was
+`tab::tab::tests::max_width_leaves_short_tabs_untouched` (expected 200px,
+received 1904px). The standalone fork resolves upstream Zed `main` because its
+manifest does not pin a revision; NyaTerm's integration check uses the matching,
+pinned Zed fork described above.

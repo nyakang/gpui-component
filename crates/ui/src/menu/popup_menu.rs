@@ -17,6 +17,99 @@ use std::rc::Rc;
 
 const CONTEXT: &str = "PopupMenu";
 
+/// Optional visual overrides for [`PopupMenu`].
+///
+/// Every field is unset by default, preserving the component's built-in
+/// sizing and spacing. A submenu inherits the nearest appearance configured on
+/// its parent unless it sets its own appearance explicitly.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PopupMenuAppearance {
+    row_height: Option<Pixels>,
+    font_size: Option<Pixels>,
+    icon_size: Option<Pixels>,
+    icon_slot_width: Option<Pixels>,
+    horizontal_padding: Option<Pixels>,
+    item_gap: Option<Pixels>,
+    content_padding: Option<Pixels>,
+    row_gap: Option<Pixels>,
+    separator_thickness: Option<Pixels>,
+    separator_vertical_margin: Option<Pixels>,
+    separator_horizontal_margin: Option<Pixels>,
+    disabled_opacity: Option<f32>,
+    item_radius: Option<Pixels>,
+}
+
+impl PopupMenuAppearance {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn row_height(mut self, height: impl Into<Pixels>) -> Self {
+        self.row_height = Some(height.into());
+        self
+    }
+
+    pub fn font_size(mut self, size: impl Into<Pixels>) -> Self {
+        self.font_size = Some(size.into());
+        self
+    }
+
+    pub fn icon_size(mut self, size: impl Into<Pixels>) -> Self {
+        self.icon_size = Some(size.into());
+        self
+    }
+
+    pub fn icon_slot_width(mut self, width: impl Into<Pixels>) -> Self {
+        self.icon_slot_width = Some(width.into());
+        self
+    }
+
+    pub fn horizontal_padding(mut self, padding: impl Into<Pixels>) -> Self {
+        self.horizontal_padding = Some(padding.into());
+        self
+    }
+
+    pub fn item_gap(mut self, gap: impl Into<Pixels>) -> Self {
+        self.item_gap = Some(gap.into());
+        self
+    }
+
+    pub fn content_padding(mut self, padding: impl Into<Pixels>) -> Self {
+        self.content_padding = Some(padding.into());
+        self
+    }
+
+    pub fn row_gap(mut self, gap: impl Into<Pixels>) -> Self {
+        self.row_gap = Some(gap.into());
+        self
+    }
+
+    pub fn separator_thickness(mut self, thickness: impl Into<Pixels>) -> Self {
+        self.separator_thickness = Some(thickness.into());
+        self
+    }
+
+    pub fn separator_vertical_margin(mut self, margin: impl Into<Pixels>) -> Self {
+        self.separator_vertical_margin = Some(margin.into());
+        self
+    }
+
+    pub fn separator_horizontal_margin(mut self, margin: impl Into<Pixels>) -> Self {
+        self.separator_horizontal_margin = Some(margin.into());
+        self
+    }
+
+    pub fn disabled_opacity(mut self, opacity: f32) -> Self {
+        self.disabled_opacity = Some(opacity.clamp(0., 1.));
+        self
+    }
+
+    pub fn item_radius(mut self, radius: impl Into<Pixels>) -> Self {
+        self.item_radius = Some(radius.into());
+        self
+    }
+}
+
 pub fn init(cx: &mut App) {
     cx.bind_keys([
         KeyBinding::new("enter", Confirm { secondary: false }, Some(CONTEXT)),
@@ -296,6 +389,7 @@ pub struct PopupMenu {
     bounds: Bounds<Pixels>,
     size: Size,
     check_side: Side,
+    appearance: Option<PopupMenuAppearance>,
 
     /// The parent menu of this menu, if this is a submenu
     parent_menu: Option<WeakEntity<Self>>,
@@ -334,6 +428,7 @@ impl PopupMenu {
             max_width: None,
             max_height: None,
             check_side: Side::Left,
+            appearance: None,
             bounds: Bounds::default(),
             scrollable: false,
             scroll_handle: ScrollHandle::default(),
@@ -412,6 +507,15 @@ impl PopupMenu {
     /// Set max height of the popup menu, default is half of the window height
     pub fn max_h(mut self, height: impl Into<Pixels>) -> Self {
         self.max_height = Some(height.into());
+        self
+    }
+
+    /// Override popup-menu visuals without changing the component defaults.
+    ///
+    /// Nested submenus inherit this appearance unless they call `appearance`
+    /// themselves.
+    pub fn appearance(mut self, appearance: PopupMenuAppearance) -> Self {
+        self.appearance = Some(appearance);
         self
     }
 
@@ -1120,9 +1224,10 @@ impl PopupMenu {
         has_icon: bool,
         checked: bool,
         icon: Option<Icon>,
+        layout: PopupMenuLayout,
         _: &mut Window,
         _: &mut Context<Self>,
-    ) -> Option<impl IntoElement> {
+    ) -> Option<AnyElement> {
         if !has_icon {
             return None;
         }
@@ -1135,7 +1240,31 @@ impl PopupMenu {
             Icon::empty()
         };
 
-        Some(icon.xsmall())
+        let icon = if let Some(size) = layout.icon_size {
+            icon.with_size(size)
+        } else {
+            icon.xsmall()
+        };
+
+        Some(if let Some(slot_width) = layout.icon_slot_width {
+            h_flex()
+                .w(slot_width)
+                .flex_none()
+                .items_center()
+                .child(icon)
+                .into_any_element()
+        } else {
+            icon.into_any_element()
+        })
+    }
+
+    fn effective_appearance(&self, cx: &App) -> Option<PopupMenuAppearance> {
+        self.appearance.or_else(|| {
+            self.parent_menu
+                .as_ref()
+                .and_then(WeakEntity::upgrade)
+                .and_then(|parent| parent.read(cx).effective_appearance(cx))
+        })
     }
 
     #[inline]
@@ -1172,28 +1301,25 @@ impl PopupMenu {
         let has_left_icon = options.has_left_icon;
         let is_left_check = options.check_side.is_left() && item.is_checked();
         let right_check_icon = if options.check_side.is_right() && item.is_checked() {
-            Some(Icon::new(IconName::Check).xsmall())
+            Some(options.layout.size_icon(Icon::new(IconName::Check)))
         } else {
             None
         };
 
         let selected = self.selected_index == Some(ix);
         const EDGE_PADDING: Pixels = px(4.);
-        const INNER_PADDING: Pixels = px(8.);
-
         let is_submenu = matches!(item, PopupMenuItem::Submenu { .. });
         let group_name = format!("{}:item-{}", cx.entity().entity_id(), ix);
 
-        let (item_height, radius) = match self.size {
-            Size::Small => (px(20.), options.radius.half()),
-            _ => (px(26.), options.radius),
-        };
+        let item_height = options.layout.row_height;
+        let radius = options.layout.item_radius;
 
         let this = MenuItemElement::new(ix, &group_name)
             .relative()
-            .text_sm()
+            .when(options.layout.font_size.is_none(), |this| this.text_sm())
+            .when_some(options.layout.font_size, |this, size| this.text_size(size))
             .py_0()
-            .px(INNER_PADDING)
+            .px(options.layout.horizontal_padding)
             .rounded(radius)
             .items_center()
             .selected(selected)
@@ -1213,19 +1339,32 @@ impl PopupMenu {
             PopupMenuItem::Separator => this
                 .h_auto()
                 .p_0()
-                .my_0p5()
-                .mx_neg_1()
-                .border_b(px(2.))
+                .my(options.layout.separator_vertical_margin)
+                .mx(options.layout.separator_horizontal_margin)
+                .border_b(options.layout.separator_thickness)
                 .border_color(cx.theme().border)
                 .disabled(true),
-            PopupMenuItem::Label(label) => this.disabled(true).cursor_default().child(
-                h_flex()
-                    .cursor_default()
-                    .items_center()
-                    .gap_x_1()
-                    .children(Self::render_icon(has_left_icon, false, None, window, cx))
-                    .child(div().flex_1().child(label.clone())),
-            ),
+            PopupMenuItem::Label(label) => this
+                .disabled(true)
+                .cursor_default()
+                .when(options.layout.has_row_height_override, |this| {
+                    this.h(item_height)
+                })
+                .child(
+                    h_flex()
+                        .cursor_default()
+                        .items_center()
+                        .gap_x(options.layout.item_gap)
+                        .children(Self::render_icon(
+                            has_left_icon,
+                            false,
+                            None,
+                            options.layout,
+                            window,
+                            cx,
+                        ))
+                        .child(div().flex_1().child(label.clone())),
+                ),
             PopupMenuItem::ElementItem {
                 render,
                 icon,
@@ -1238,16 +1377,18 @@ impl PopupMenu {
                     )
                 })
                 .disabled(*disabled)
+                .disabled_opacity(options.layout.disabled_opacity)
                 .child(
                     h_flex()
                         .flex_1()
                         .min_h(item_height)
                         .items_center()
-                        .gap_x_1()
+                        .gap_x(options.layout.item_gap)
                         .children(Self::render_icon(
                             has_left_icon,
                             is_left_check,
                             icon.clone(),
+                            options.layout,
                             window,
                             cx,
                         ))
@@ -1272,12 +1413,14 @@ impl PopupMenu {
                     )
                 })
                 .disabled(*disabled)
+                .disabled_opacity(options.layout.disabled_opacity)
                 .h(item_height)
-                .gap_x_1()
+                .gap_x(options.layout.item_gap)
                 .children(Self::render_icon(
                     has_left_icon,
                     is_left_check,
                     icon.clone(),
+                    options.layout,
                     window,
                     cx,
                 ))
@@ -1297,8 +1440,9 @@ impl PopupMenu {
                                     .gap_1p5()
                                     .child(label.clone())
                                     .child(
-                                        Icon::new(IconName::ExternalLink)
-                                            .xsmall()
+                                        options
+                                            .layout
+                                            .size_icon(Icon::new(IconName::ExternalLink))
                                             .text_color(cx.theme().muted_foreground),
                                     ),
                             )
@@ -1314,17 +1458,19 @@ impl PopupMenu {
             } => this
                 .selected(selected)
                 .disabled(*disabled)
+                .disabled_opacity(options.layout.disabled_opacity)
                 .items_start()
                 .child(
                     h_flex()
                         .min_h(item_height)
                         .size_full()
                         .items_center()
-                        .gap_x_1()
+                        .gap_x(options.layout.item_gap)
                         .children(Self::render_icon(
                             has_left_icon,
                             false,
                             icon.clone(),
+                            options.layout,
                             window,
                             cx,
                         ))
@@ -1336,8 +1482,9 @@ impl PopupMenu {
                                 .justify_between()
                                 .child(label.clone())
                                 .child(
-                                    Icon::new(IconName::ChevronRight)
-                                        .xsmall()
+                                    options
+                                        .layout
+                                        .size_icon(Icon::new(IconName::ChevronRight))
                                         .text_color(cx.theme().muted_foreground),
                                 ),
                         ),
@@ -1380,7 +1527,60 @@ impl Focusable for PopupMenu {
 struct RenderOptions {
     has_left_icon: bool,
     check_side: Side,
-    radius: Pixels,
+    layout: PopupMenuLayout,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct PopupMenuLayout {
+    row_height: Pixels,
+    has_row_height_override: bool,
+    font_size: Option<Pixels>,
+    icon_size: Option<Pixels>,
+    icon_slot_width: Option<Pixels>,
+    horizontal_padding: Pixels,
+    item_gap: Pixels,
+    content_padding: Pixels,
+    row_gap: Pixels,
+    separator_thickness: Pixels,
+    separator_vertical_margin: Pixels,
+    separator_horizontal_margin: Pixels,
+    disabled_opacity: Option<f32>,
+    item_radius: Pixels,
+}
+
+impl PopupMenuLayout {
+    fn resolve(size: Size, radius: Pixels, appearance: Option<PopupMenuAppearance>) -> Self {
+        let appearance = appearance.unwrap_or_default();
+        let (default_height, default_radius) = match size {
+            Size::Small => (px(20.), radius.half()),
+            _ => (px(26.), radius),
+        };
+
+        Self {
+            row_height: appearance.row_height.unwrap_or(default_height),
+            has_row_height_override: appearance.row_height.is_some(),
+            font_size: appearance.font_size,
+            icon_size: appearance.icon_size,
+            icon_slot_width: appearance.icon_slot_width,
+            horizontal_padding: appearance.horizontal_padding.unwrap_or(px(8.)),
+            item_gap: appearance.item_gap.unwrap_or(px(4.)),
+            content_padding: appearance.content_padding.unwrap_or(px(4.)),
+            row_gap: appearance.row_gap.unwrap_or(px(2.)),
+            separator_thickness: appearance.separator_thickness.unwrap_or(px(2.)),
+            separator_vertical_margin: appearance.separator_vertical_margin.unwrap_or(px(2.)),
+            separator_horizontal_margin: appearance.separator_horizontal_margin.unwrap_or(px(-4.)),
+            disabled_opacity: appearance.disabled_opacity,
+            item_radius: appearance.item_radius.unwrap_or(default_radius),
+        }
+    }
+
+    fn size_icon(self, icon: Icon) -> Icon {
+        if let Some(size) = self.icon_size {
+            icon.with_size(size)
+        } else {
+            icon.xsmall()
+        }
+    }
 }
 
 impl Render for PopupMenu {
@@ -1419,10 +1619,15 @@ impl Render for PopupMenu {
             .any(|item| item.has_left_icon(self.check_side));
 
         let max_width = self.max_width();
+        let layout = PopupMenuLayout::resolve(
+            self.size,
+            cx.theme().radius.min(px(8.)),
+            self.effective_appearance(cx),
+        );
         let options = RenderOptions {
             has_left_icon,
             check_side: self.check_side,
-            radius: cx.theme().radius.min(px(8.)),
+            layout,
         };
 
         v_flex()
@@ -1444,8 +1649,8 @@ impl Render for PopupMenu {
             .child(
                 v_flex()
                     .id("items")
-                    .p_1()
-                    .gap_y_0p5()
+                    .p(layout.content_padding)
+                    .gap_y(layout.row_gap)
                     .min_w(rems(8.))
                     .when_some(self.min_width, |this, min_width| this.min_w(min_width))
                     .max_w(max_width)
@@ -1474,6 +1679,90 @@ impl Render for PopupMenu {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_appearance_preserves_existing_popup_metrics() {
+        let medium = PopupMenuLayout::resolve(Size::Medium, px(8.), None);
+        assert_eq!(medium.row_height, px(26.));
+        assert!(!medium.has_row_height_override);
+        assert_eq!(medium.font_size, None);
+        assert_eq!(medium.icon_size, None);
+        assert_eq!(medium.icon_slot_width, None);
+        assert_eq!(medium.horizontal_padding, px(8.));
+        assert_eq!(medium.item_gap, px(4.));
+        assert_eq!(medium.content_padding, px(4.));
+        assert_eq!(medium.row_gap, px(2.));
+        assert_eq!(medium.separator_thickness, px(2.));
+        assert_eq!(medium.separator_vertical_margin, px(2.));
+        assert_eq!(medium.separator_horizontal_margin, px(-4.));
+        assert_eq!(medium.disabled_opacity, None);
+        assert_eq!(medium.item_radius, px(8.));
+
+        let small = PopupMenuLayout::resolve(Size::Small, px(8.), None);
+        assert_eq!(small.row_height, px(20.));
+        assert_eq!(small.item_radius, px(4.));
+    }
+
+    #[test]
+    fn appearance_overrides_popup_metrics_and_clamps_opacity() {
+        let appearance = PopupMenuAppearance::new()
+            .row_height(px(28.))
+            .font_size(px(12.))
+            .icon_size(px(16.))
+            .icon_slot_width(px(24.))
+            .horizontal_padding(px(8.))
+            .item_gap(px(8.))
+            .content_padding(px(4.))
+            .row_gap(px(0.))
+            .separator_thickness(px(1.))
+            .separator_vertical_margin(px(4.))
+            .separator_horizontal_margin(px(0.))
+            .disabled_opacity(1.5)
+            .item_radius(px(4.));
+        let layout = PopupMenuLayout::resolve(Size::Small, px(12.), Some(appearance));
+
+        assert_eq!(layout.row_height, px(28.));
+        assert!(layout.has_row_height_override);
+        assert_eq!(layout.font_size, Some(px(12.)));
+        assert_eq!(layout.icon_size, Some(px(16.)));
+        assert_eq!(layout.icon_slot_width, Some(px(24.)));
+        assert_eq!(layout.horizontal_padding, px(8.));
+        assert_eq!(layout.item_gap, px(8.));
+        assert_eq!(layout.content_padding, px(4.));
+        assert_eq!(layout.row_gap, px(0.));
+        assert_eq!(layout.separator_thickness, px(1.));
+        assert_eq!(layout.separator_vertical_margin, px(4.));
+        assert_eq!(layout.separator_horizontal_margin, px(0.));
+        assert_eq!(layout.disabled_opacity, Some(1.));
+        assert_eq!(layout.item_radius, px(4.));
+    }
+
+    #[gpui::test]
+    fn submenus_inherit_appearance_unless_they_override_it(cx: &mut gpui::TestAppContext) {
+        let parent_appearance = PopupMenuAppearance::new().row_height(px(28.));
+        let child_appearance = PopupMenuAppearance::new().row_height(px(32.));
+        let parent = cx.update(|cx| cx.new(|cx| PopupMenu::new(cx).appearance(parent_appearance)));
+        let child = cx.update(|cx| {
+            let child = cx.new(|cx| PopupMenu::new(cx));
+            child.update(cx, |child, _| {
+                child.parent_menu = Some(parent.downgrade());
+            });
+            child
+        });
+
+        assert_eq!(
+            child.read_with(cx, |child, cx| child.effective_appearance(cx)),
+            Some(parent_appearance)
+        );
+
+        child.update(cx, |child, _| {
+            child.appearance = Some(child_appearance);
+        });
+        assert_eq!(
+            child.read_with(cx, |child, cx| child.effective_appearance(cx)),
+            Some(child_appearance)
+        );
+    }
 
     #[gpui::test]
     fn popup_menu_item_a11y_label_uses_visible_label(cx: &mut gpui::TestAppContext) {
