@@ -5,7 +5,7 @@ to `gpui-component` on top of an unmodified upstream base.
 
 - Fork: <https://github.com/nyakang/gpui-component>
 - Upstream: <https://github.com/longbridge/gpui-component>
-- Base revision: `0bfcb64023` (upstream `main`, `gpui-component` 0.5.2)
+- Base revision: `884062aeb3` (upstream `main`, `gpui-component` 0.6.0)
 - Branch: `nyaterm`
 
 NyaTerm uses this crate through the stable `nyaterm-ui` facade, so these are the
@@ -17,23 +17,24 @@ changes that could not be made on the NyaTerm side.
    `TabVariant::Segmented` the inner container takes the full width and each
    wrapper becomes `flex_1` with `min_w_0`, so segments divide the bar evenly
    instead of hugging their labels. Other variants are unchanged.
-2. `fix(dialog): make the backdrop event wrapper cover the viewport` — the
-   wrapper was laid out in flow, so a press on the dimmed area outside its box
-   neither dismissed the dialog nor blocked the press from reaching content
-   underneath.
-3. `feat(scrollbar): reveal a hover scrollbar from anywhere in the viewport` —
+2. `feat(scrollbar): reveal a hover scrollbar from anywhere in the viewport` —
    `ScrollbarMode::Hover` revealed the bar only from inside the track bounds, so
    a hidden bar had to be aimed at blind. Adds
    `ScrollbarStateInner::hovered_viewport`, fed by `HitboxId::is_hovered` so an
    overlay does not reveal the bar behind it, and a `reveal_hover` predicate.
    Thumb styling still keys off track hover alone; `Scrolling` and `Always` are
    unchanged.
-4. `feat(menu): support configurable popup appearance` — adds an opt-in
+3. `feat(menu): support configurable popup appearance` — adds an opt-in
    `PopupMenuAppearance` for row, typography, icon-slot, spacing, separator,
    radius and disabled-state metrics. The default keeps the upstream rendering
    unchanged, while nested submenus inherit the nearest parent appearance
    unless they explicitly override it. NyaTerm uses this at its `nyaterm-ui`
    boundary to align ordinary component menus with its richer tab context menu.
+4. `build(deps): use the NyaTerm GPUI fork` — upstream 0.6.0 uses the
+   `gpui-pre 0.3.1` package set. This branch points every Zed-derived workspace
+   dependency at one revision of `nyakang/zed`, rebased onto that package
+   set's `801c087a` source snapshot, so NyaTerm keeps its dynamic-texture and
+   hidden-cursor APIs without linking two incompatible GPUI copies.
 
 ## Not carried here
 
@@ -45,60 +46,33 @@ changes that could not be made on the NyaTerm side.
   projection, and upstream added a regression test for it
   (`base_projection_carries_a_square_radius_to_the_scrollbar`). Consumers that
   called `Theme::sync_scrollbar_theme(cx)` call `Theme::sync_base(cx)` instead.
+- `fix(dialog): make the backdrop event wrapper cover the viewport` — upstream
+  `df1d07b2` fixed the same collapsed-wrapper bug with
+  `.absolute().inset_0()` and added `the_backdrop_fills_the_host`. The merge
+  keeps that implementation and drops NyaTerm's older `.size_full()` hunk.
 
-The NyaTerm snapshot also rewires where dependencies come from, which is a
-vendor-layout concern rather than a change to this library:
+Upstream 0.6.0 also renamed `gpui-component-assets` to `gpui-kit-assets`.
+NyaTerm keeps its existing dependency key as a Cargo alias so application code
+continues to import `gpui_component_assets`.
 
-- `gpui`, `gpui_platform`, `gpui_web`, `gpui_macros` and `reqwest_client` are
-  repointed from upstream's git dependencies to sibling paths under
-  `vendor/zed`, so one `gpui` is shared with NyaTerm's Zed snapshot.
-- `reqwest` is taken from the registry as `zed-reqwest` instead of upstream's
-  git dependency, for the same reason.
+## Merge notes
 
-This branch keeps upstream's dependency sources. A consumer that needs one
-shared `gpui` should express that with `[patch]` entries in its own workspace.
-
-Note upstream's `gpui` git dependency is not pinned to a revision, so building
-this branch on its own resolves whatever `zed-industries/zed` currently has at
-`main`, which may be far ahead of the snapshot these patches were written
-against. That is a property of the upstream manifest, not of these patches.
-`.github/workflows/nyaterm.yml` pins it to the revision NyaTerm uses, and that
-pin has to move whenever NyaTerm's `Cargo.toml` does.
-
-## Rebase notes
-
-Only `crates/ui/src/tab/tab_bar.rs` conflicted, and only over layout: upstream
-reworked that render body (`222cf964`, `cc86f8d4`, `9e069926`) and added
-`.mx(-padding_x).px(padding_x)` to both the `tabs` and `tabs-inner` flexes. The
-resolution keeps upstream's shape and re-inserts the one `w_full` line the patch
-adds for `Segmented`. `crates/base/src/scrollbar.rs` and
-`crates/base/src/dialog.rs` are still byte-identical upstream, so those two
-patches applied untouched and are still needed.
+The 0.6.0 merge moved `crates/ui` to `crates/component`; Git carried the
+segmented-tab and popup-appearance changes across the rename automatically.
+The scrollbar patch also merged without conflict. Only
+`crates/base/src/dialog.rs` conflicted, because upstream had independently
+fixed the same bug; the resolution takes the upstream implementation and test.
 
 ## Validation
 
-Validated against the matching Zed snapshot by pointing the `gpui*` dependencies
-at a local checkout of <https://github.com/nyakang/zed> branch `nyaterm`
-(`275f31ac`, upstream `4278ff36` plus NyaTerm's GPUI patches) through an
-uncommitted `[patch]` in `.cargo/config.toml`, on Windows 11:
+Validated on Windows 11 against `nyakang/zed:nyaterm` revision
+`3b3066c872`, whose patch stack is based on the same `801c087a` snapshot as
+`gpui-pre 0.3.1`:
 
 ```sh
-cargo test -p gpui-base          # 574 passed, incl. the two reveal_hover cases
-cargo test -p gpui-base reveal   # 2 passed
-cargo check -p gpui-component    # clean
+cargo test -p gpui-base
+cargo test -p gpui-base reveal
+cargo test -p gpui-component menu::popup_menu --lib
+cargo check -p gpui-component
+cargo clippy -p gpui-component --all-targets
 ```
-
-The popup appearance patch was additionally validated on Windows 11 with:
-
-```sh
-cargo test -p gpui-component menu::popup_menu --lib # 4 passed
-cargo test -p gpui-component # 465 passed; one unrelated tab-width test failed
-cargo check -p gpui-component # clean
-cargo clippy -p gpui-component --all-targets # clean
-```
-
-The full-test failure was
-`tab::tab::tests::max_width_leaves_short_tabs_untouched` (expected 200px,
-received 1904px). The standalone fork resolves upstream Zed `main` because its
-manifest does not pin a revision; NyaTerm's integration check uses the matching,
-pinned Zed fork described above.
