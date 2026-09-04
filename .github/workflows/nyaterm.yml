@@ -1,21 +1,8 @@
 name: NyaTerm branch
 
-# gpui-component's patch branch declares gpui, gpui_macros and gpui_platform
-# against upstream zed-industries/zed, unpinned, and upstream's ci.yml only
-# triggers on `main`. Both are deliberate: the branch carries no vendor-layout
-# changes so it rebases cleanly. This workflow pins the exact zed revision
-# NyaTerm uses through a config-level [patch], which leaves the branch's
-# manifest untouched, and runs the base-scoped checks that make sense for this
-# branch.
-#
-# The [patch] is appended to the repository's existing .cargo/config.toml, which
-# already carries a Windows linker flag. Cargo re-reads that file on each
-# invocation, so later steps see it too.
-#
-# The zed URL must match the manifest's string exactly, including the absent
-# `.git` suffix. `gpui` is pinned by version because the zed repository also
-# contains tooling/lints/test_fixture/gpui at 0.0.0, and a bare git reference
-# is ambiguous.
+# Upstream 0.6.0 uses the published gpui-pre snapshot. NyaTerm needs its
+# dynamic-texture and hidden-cursor patches, so this branch pins every
+# Zed-derived workspace crate to one matching fork revision.
 
 on:
   push:
@@ -40,24 +27,17 @@ jobs:
       - name: Install system dependencies
         run: script/bootstrap
 
-      - name: Pin the zed fork NyaTerm uses
-        run: |
-          # Append: the repository already tracks .cargo/config.toml for a
-          # Windows linker flag, and overwriting it would drop that.
-          cat >> .cargo/config.toml <<'EOF'
-          [patch."https://github.com/zed-industries/zed"]
-          gpui = { version = "=0.2.2", git = "https://github.com/nyakang/zed", rev = "275f31ac7293280e86763ec33933d4b6a4508847" }
-          gpui_macros = { git = "https://github.com/nyakang/zed", rev = "275f31ac7293280e86763ec33933d4b6a4508847" }
-          gpui_platform = { git = "https://github.com/nyakang/zed", rev = "275f31ac7293280e86763ec33933d4b6a4508847" }
-          EOF
-          # Assert the fork's own gpui resolves, not upstream's.
-          cargo metadata --format-version 1 | grep -c 'nyakang/zed?rev=275f31ac'
+      - name: Verify the pinned Zed fork
+        run: cargo metadata --format-version 1 | grep -q 'nyakang/zed?rev=3b3066c872'
 
       - name: Base crate tests
         run: cargo test -p gpui-base
 
       - name: Scrollbar reveal tests
         run: cargo test -p gpui-base reveal
+
+      - name: Popup menu appearance tests
+        run: cargo test -p gpui-component menu::popup_menu --lib
 
       - name: Component crate check
         run: cargo check -p gpui-component
